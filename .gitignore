@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.egg-info/
+.Python
+build/
+dist/
+
+# Virtual environment
+venv/
+env/
+.env
+
+# IDE-specific files
+.vscode/
+.idea/
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# Uploaded files
+media/
+
+# Test and coverage
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Specific to this project
+serviceAccountKey.json

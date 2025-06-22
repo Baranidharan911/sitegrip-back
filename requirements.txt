@@ -1,0 +1,9 @@
+requests
+fastapi
+uvicorn[standard]
+python-dotenv
+firebase-admin
+playwright
+pydantic
+google-generativeai
+lxml
