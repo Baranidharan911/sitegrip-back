@@ -1,0 +1,46 @@
+# Git files
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Deployment files for other platforms
+app.yaml
+railway.toml
+render.yaml
+deploy.bat
+deploy.ps1
+Procfile
+
+# Documentation
+*.md
+DEPLOYMENT.md
+
+# Local development files
+.env
+test_*.py
+
+# Google Cloud SDK installer
+GoogleCloudSDKInstaller.exe 

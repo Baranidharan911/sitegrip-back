@@ -13,6 +13,7 @@ from models.page_data import PageData
 from analyzers.analyzer import SEOAnalyzer
 from analyzers.summarizer import summarizer_service
 from services.storage import storage_service
+from services.keyword_storage import keyword_storage_service
 from models.crawl_result import CrawlResult
 from ai.ai import ai_service
 
@@ -22,6 +23,7 @@ class CrawlRequest(BaseModel):
     url: str
     depth: int = 1
     selectedUrls: Optional[List[str]] = None  # ✅ NEW FIELD
+    user_id: Optional[str] = None  # ✅ NEW FIELD for user-specific crawls
 
 @router.post("/crawl", response_model=CrawlResult)
 async def trigger_crawl(request: CrawlRequest = Body(...)):
@@ -82,19 +84,30 @@ async def trigger_crawl(request: CrawlRequest = Body(...)):
     analyzer = SEOAnalyzer(all_pages_data=filtered_pages)
     analyzed_pages = analyzer.run_analysis()
 
+    # Generate crawl_id early so it can be used for keyword storage
+    crawl_id = str(uuid.uuid4())
+
     suggestions = await ai_service.analyze_batch(analyzed_pages)
     for i, page in enumerate(analyzed_pages):
         page.suggestions = suggestions[i]
+        
+        # Store keyword analysis if available
+        if page.suggestions and page.suggestions.keyword_analysis:
+            keyword_storage_service.store_keyword_analysis(
+                page.url, 
+                page.suggestions.keyword_analysis, 
+                crawl_id
+            )
 
     crawled_urls = {page.url for page in analyzed_pages}
     summary = summarizer_service.generate_summary(analyzed_pages, sitemap_urls, crawled_urls)
     ai_summary_text = await ai_summary_service.summarize_crawl(analyzed_pages)
 
-    crawl_id = str(uuid.uuid4())
     result = CrawlResult(
         crawlId=crawl_id,
         url=request.url,
         depth=request.depth,
+        userId=request.user_id,
         summary=summary,
         pages=analyzed_pages,
         sitemapUrls=sitemap_urls,

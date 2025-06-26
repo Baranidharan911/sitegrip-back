@@ -24,6 +24,15 @@ async def export_csv(pages: List[PageData] = Body(...)):
         "AI Title",
         "AI Description",
         "AI Content Suggestions",
+        "Priority Score",
+        "Potential Impact",
+        "Confidence Score",
+        "Primary Keywords",
+        "Suggested Keywords",
+        "Missing Keywords",
+        "Long-tail Suggestions",
+        "Readability Score",
+        "Content Gaps"
     ])
 
     for page in pages:
@@ -40,6 +49,15 @@ async def export_csv(pages: List[PageData] = Body(...)):
             page.suggestions.title if page.suggestions else "",
             page.suggestions.description if page.suggestions else "",
             page.suggestions.content if page.suggestions else "",
+            page.suggestions.priority_score if page.suggestions else "",
+            page.suggestions.potential_impact if page.suggestions else "",
+            page.suggestions.confidence_score if page.suggestions else "",
+            "; ".join(page.suggestions.keyword_analysis.primary_keywords) if page.suggestions and page.suggestions.keyword_analysis else "",
+            "; ".join(page.suggestions.keyword_analysis.suggested_keywords) if page.suggestions and page.suggestions.keyword_analysis else "",
+            "; ".join(page.suggestions.keyword_analysis.missing_keywords) if page.suggestions and page.suggestions.keyword_analysis else "",
+            "; ".join(page.suggestions.keyword_analysis.long_tail_suggestions) if page.suggestions and page.suggestions.keyword_analysis else "",
+            page.suggestions.content_suggestions.readability_score if page.suggestions and page.suggestions.content_suggestions else "",
+            "; ".join(page.suggestions.content_suggestions.content_gaps) if page.suggestions and page.suggestions.content_suggestions else "",
         ])
 
     csv_data = output.getvalue()

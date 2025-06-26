@@ -4,6 +4,10 @@ import requests
 from typing import Set, Optional
 from bs4 import BeautifulSoup
 
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (compatible; SiteGripBot/1.0; +https://sitegrip.com/bot)'
+}
+
 def normalize_url(base_url: str, link: str) -> str:
     absolute_link = urljoin(base_url, link)
     parsed_link = urlparse(absolute_link)
@@ -22,10 +26,7 @@ def parse_sitemap(sitemap_url: str) -> Set[str]:
         return urls
 
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
-        }
-        response = requests.get(sitemap_url, headers=headers, timeout=15)
+        response = requests.get(sitemap_url, headers=HEADERS, timeout=15)
         response.raise_for_status()
 
         content_type = response.headers.get('Content-Type', '').lower()
@@ -38,43 +39,41 @@ def parse_sitemap(sitemap_url: str) -> Set[str]:
                 if loc.text:
                     loc_text = loc.text.strip()
                     if loc_text.endswith('.xml'):
-                        urls.update(parse_sitemap(loc_text))
+                        urls.update(parse_sitemap(loc_text))  # Recursive parse
                     else:
                         urls.add(loc_text)
-            return urls
 
         elif 'html' in content_type:
-            print(f"Warning: Received HTML at {sitemap_url}. Searching for XML links.")
+            print(f"[sitemap] ⚠️ Received HTML at {sitemap_url}. Looking for .xml links.")
             soup = BeautifulSoup(response.content, 'html.parser')
             sitemap_links = soup.find_all('a', href=lambda href: href and href.endswith('.xml'))
             for link in sitemap_links:
                 absolute_link = urljoin(sitemap_url, link['href'])
-                print(f"Found potential sitemap link: {absolute_link}. Parsing it.")
+                print(f"[sitemap] ➕ Found nested sitemap: {absolute_link}")
                 urls.update(parse_sitemap(absolute_link))
-            return urls
 
         else:
-            print(f"Warning: Unsupported content type at {sitemap_url}: {content_type}")
-            return urls
+            print(f"[sitemap] ⚠️ Unsupported content type at {sitemap_url}: {content_type}")
 
     except requests.RequestException as e:
         if hasattr(e, 'response') and e.response and e.response.status_code == 404:
-            print(f"Info: No sitemap found at {sitemap_url} (404 Not Found).")
+            print(f"[sitemap] ℹ️ No sitemap found at {sitemap_url} (404).")
         else:
-            print(f"Could not fetch sitemap from {sitemap_url}: {e}")
+            print(f"[sitemap] ❌ Could not fetch {sitemap_url}: {e}")
     except etree.XMLSyntaxError as e:
-        print(f"Error parsing XML from {sitemap_url}: {e}")
+        print(f"[sitemap] ❌ XML parse error at {sitemap_url}: {e}")
 
     return urls
 
 def get_sitemap_urls_from_robots(robots_url: str) -> list[str]:
     try:
-        res = requests.get(robots_url, timeout=5)
-        if res.status_code != 200:
+        response = requests.get(robots_url, headers=HEADERS, timeout=10)
+        if response.status_code != 200:
+            print(f"[robots.txt] ⚠️ Non-200 status: {response.status_code}")
             return []
 
-        lines = res.text.splitlines()
         sitemap_urls = []
+        lines = response.text.splitlines()
         for line in lines:
             if line.strip().lower().startswith("sitemap:"):
                 parts = line.split(":", 1)
@@ -86,5 +85,5 @@ def get_sitemap_urls_from_robots(robots_url: str) -> list[str]:
         return list(set(sitemap_urls))
 
     except Exception as e:
-        print(f"[robots.txt] Failed to fetch or parse: {e}")
+        print(f"[robots.txt] ❌ Failed to fetch or parse: {e}")
         return []

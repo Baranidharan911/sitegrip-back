@@ -1,0 +1,60 @@
+# This file specifies files that are *not* uploaded to Google Cloud Platform
+# using gcloud. It follows the same syntax as .gitignore.
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Development files
+run.py
+
+# Documentation
+DEPLOYMENT.md
+README*
+
+# Other deployment configs
+Procfile
+railway.toml
+render.yaml
+docker-compose.yml
+# Dockerfile - Keep this for Cloud Run deployment
+
+# Deployment scripts
+deploy.ps1
+deploy.bat
+GoogleCloudSDKInstaller.exe
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+
+# Security - Never deploy service account keys
+serviceAccountKey.json
+serviceAccountKe.json
+*serviceAccount*.json 

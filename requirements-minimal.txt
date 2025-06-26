@@ -1,0 +1,15 @@
+# Minimal requirements for SiteGrip Indexing Module
+# Core FastAPI dependencies
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+pydantic==2.9.2
+
+# HTTP requests
+requests==2.32.3
+
+# Environment variables
+python-dotenv==1.0.1
+
+# Basic utilities
+schedule==1.2.0 

@@ -10,10 +10,24 @@ def initialize_firestore():
     """
     if not firebase_admin._apps:
         try:
-            # The path to your service account key file
-            cred = credentials.Certificate("serviceAccountKey.json")
-            firebase_admin.initialize_app(cred)
-            print("Firebase Admin SDK initialized successfully.")
+            # Check if we're running on Cloud Run, App Engine, or locally
+            if os.getenv('K_SERVICE') or os.getenv('GAE_ENV'):
+                # Running on Cloud Run or App Engine - use Application Default Credentials
+                # with explicit project ID
+                project_id = os.getenv('GOOGLE_CLOUD_PROJECT', 'sitegrip-firestore')
+                firebase_admin.initialize_app(options={'projectId': project_id})
+                print(f"Firebase Admin SDK initialized with Application Default Credentials (Cloud Run/App Engine) for project: {project_id}")
+            else:
+                # Running locally - use service account key file
+                if os.path.exists("serviceAccountKey.json"):
+                    cred = credentials.Certificate("serviceAccountKey.json")
+                    firebase_admin.initialize_app(cred)
+                    print("Firebase Admin SDK initialized with service account key (Local).")
+                else:
+                    # Fallback to Application Default Credentials
+                    project_id = os.getenv('GOOGLE_CLOUD_PROJECT', 'sitegrip-firestore')
+                    firebase_admin.initialize_app(options={'projectId': project_id})
+                    print(f"Firebase Admin SDK initialized with Application Default Credentials (Fallback) for project: {project_id}")
         except Exception as e:
             print(f"Error initializing Firebase Admin SDK: {e}")
             # You might want to raise the exception or handle it as needed
@@ -26,6 +40,25 @@ def get_firestore_client():
     """
     initialize_firestore()
     return firestore.client()
+
+# Create a global client instance for easy importing
+firestore_client = None
+
+def get_or_create_firestore_client():
+    """
+    Returns the global Firestore client, creating it if necessary.
+    """
+    global firestore_client
+    if firestore_client is None:
+        firestore_client = get_firestore_client()
+    return firestore_client
+
+# Initialize the global client
+try:
+    firestore_client = get_firestore_client()
+except Exception as e:
+    print(f"Warning: Could not initialize firestore_client during import: {e}")
+    firestore_client = None
 
 # Example of how to use it (optional, for direct testing)
 if __name__ == "__main__":

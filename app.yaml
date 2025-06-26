@@ -1,0 +1,17 @@
+runtime: python311
+
+entrypoint: gunicorn -w 4 -k uvicorn.workers.UvicornWorker asgi:application --bind=0.0.0.0:$PORT
+
+handlers:
+  # This handler routes all requests to your main app
+  - url: /.*
+    script: auto
+
+automatic_scaling:
+  min_instances: 0
+  max_instances: 10
+  target_cpu_utilization: 0.6
+
+# Enable the Cloud Build API and other required services
+inbound_services:
+  - warmup 

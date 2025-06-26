@@ -25,6 +25,7 @@ class CrawlResult(BaseModel):
     url: str
     depth: int
     crawled_at: datetime = Field(default_factory=datetime.utcnow, alias="crawledAt")
+    user_id: Optional[str] = Field(None, alias="userId")
     summary: CrawlSummary
     pages: List[PageData]
     sitemap_urls: Set[str] = Field(default_factory=set, alias="sitemapUrls")

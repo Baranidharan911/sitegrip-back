@@ -119,9 +119,14 @@ class SiteCrawler:
         console_errors: List[str] = []
 
         # 🐞 JS Console Error Listener
-        page.on("console", lambda msg: (
-            console_errors.append(msg.text()) if msg.type == "error" else None
-        ))
+        def handle_console(msg):
+            try:
+                if msg.type == "error":
+                    console_errors.append(msg.text)
+            except Exception:
+                pass
+        
+        page.on("console", handle_console)
 
         def handle_response(response: Response):
             nonlocal page_size_bytes, ttfb
