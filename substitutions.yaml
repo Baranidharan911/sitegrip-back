@@ -1,0 +1,17 @@
+substitutions:
+  _GEMINI_API_KEY: "AIzaSyC20lXgVUt4gBzx7NKKB85CdI1pY1nh0ZI"
+  _FIREBASE_WEB_API_KEY: "AIzaSyDcOJh_ClEATDdmsZ7haVXAhuEMBxo026U"
+  _GOOGLE_SERVICE_ACCOUNT_JSON: |
+    {
+      "type": "service_account",
+      "project_id": "sitegrip-backend",
+      "private_key_id": "e448415a2cd0e4b3ac4864ffe762330df5e22a35",
+      "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDI+NNEYTIwn44N\nVtxOt9a+/+LNfZM2YGtQHrnIqEAXpfyWlbaPBkavzqGmsnc2HTirM3FmVwVoy+wC\nKSJq0WBSOIL+zNBioPtyyPvQPDdilpDYJ9EuM7QAVJ92q/gMZ81wo6vSjywLU8eY\nUVeEP6UnsEbb2j2YMyxMZvORstGo1N5YHiz94to6pYhr6uy5Bymmy/URTSwBo6f0\nvgq2tXR8OnBYFqq2Ajk87gfGBgpDXUZEjodkaU+8ADpD+J8DXOoFnNARmMb8LIvk\n+CAIb4uCOq7tsv8NhnWxZNBkM/HK8A4WEKe3NiZyaqEw/KAdGDiw87lMjQnRwRja\nmVtFXF63AgMBAAECggEAE7FWILtjC9XgOVLLY0DeX3h7EYAX+CcTvOKveVSk2x+R\nRz9dh4xDSiAPdPv3dHg08/AMt5nlVmYZ0GhjDmAWQr6o3C2jnPAbU4PgMOc41VJ3\nPpPZ10YkgdFij5VWrzIb5/xE7oZhXkbHJksqLgCyi6Ry43SLvpADhWtwVVS8kjQ4\nJE377wO9IVyd3cr5H4mzF5exLpqTo7fiPYO99ecA7cQ9hF7fORcpmh0uQUo60562\nolSSNpGeZeQjkp6bEyRY5Bt4wpoudWbPaodBQv0mekXDvD4xyoxWEZw7Mpe//Lka\nyjSktgqlPLmzNCaEyiXjY5LFHSIiLLHJa4il+d6TwQKBgQD7xblcjE0+O1wor+y0\nsw92ayogSIbzehka4U9fPF2n2PmCE61k/smF7M+UQhuQNS7+kCl/KMiH7BWL/+1u\ncqMyv0jnbAFERu4lCuUDikSI00razfuOHVMzHMS8/toYfWUmhxsQM44ZIlSJpz49\nEk8bV0T6YwqitdtLXfLUAIiIVwKBgQDMWLqsGHYKAq1cOdW2URIjClg8IeV4/nuu\n8dHLDnrUrvmWHnoUTzt2nNehNHByoXUf5wm2pjMjqbSVGuuvbF5QXff+wrP4oIL5\nuNdMp7CqIMmPA9adFhDvsnCSwM0zYphfxsq1kYn1mERWVo+nCCjQsGGEb2lQ3yFU\n0jRQI9JgoQKBgCtQogo9DRD2z20kjxmrcK6T00SIlccPq4AHYUtmLEqzNoHddshY\nWT1UN4YvNWTC8ZnUHX+F+bIAuNhEKIoG6PLTG+zMlQ81EMWIsUvBnvbXOxqXs36I\npwa1HVfSlJz//cX6GnrYE8tZL6gbAMcq/jca9YAKSAskNF0sBZnZmaOzAoGAayK5\n/DB28piku4229ndawvRRfnVnEiCaSAaQr51P2OJECOjBqJRB4NYqV2Je8jqkZa2D\n8jcA6Nm4y9PpbXermwcpVnBOWzQMd1Dp0E662PeHtWuVwZYoGwO68bYT37T5nn1j\nGf7MDe9fJMUNW81zWLag6gZfeP8DQq1SsBGX4wECgYBQ4v2guI++kS4fijmRuDhT\nXszgqrvLEuZYAhpU8ASY/TGPV5igUcMjFA5ob9E+S/M1N7AZSA3IHqfw7fAex20W\nkhHOxeTynV2R2pjtBqH7nxfz9OWnuC7LiGZVsVji/qKroBhvuG7MrxWDuLEcPevB\nmvfaTgNgwwUChyIUsIJ8Wg==\n-----END PRIVATE KEY-----\n",
+      "client_email": "indexing-sitegrip-firestore@sitegrip-backend.iam.gserviceaccount.com",
+      "client_id": "113954925793838942835",
+      "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+      "token_uri": "https://oauth2.googleapis.com/token",
+      "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+      "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/indexing-sitegrip-firestore%40sitegrip-backend.iam.gserviceaccount.com",
+      "universe_domain": "googleapis.com"
+    } 

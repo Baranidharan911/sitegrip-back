@@ -1,6 +1,7 @@
 import json
 import asyncio
 from datetime import datetime, timedelta
+import datetime as dt
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 from google.oauth2.credentials import Credentials
@@ -59,7 +60,7 @@ class GoogleAuthService:
             if "error" in token_data:
                 return {"success": False, "error": token_data.get("error_description", "Token exchange failed")}
 
-            expiry = datetime.datetime.utcnow() + datetime.timedelta(seconds=token_data.get("expires_in", 3600))
+            expiry = dt.datetime.utcnow() + dt.timedelta(seconds=token_data.get("expires_in", 3600))
             google_creds = GoogleCredentials(
                 access_token=token_data["access_token"],
                 refresh_token=token_data.get("refresh_token"),
@@ -87,58 +88,91 @@ class GoogleAuthService:
 
     async def get_user_credentials(self, user_id: str) -> Optional[Credentials]:
         try:
+            print(f"🔍 [GoogleAuthService] Getting credentials for user: {user_id}")
+            
             user_doc = self.db.collection('users').document(user_id).get()
             if not user_doc.exists:
+                print(f"❌ [GoogleAuthService] User document not found: {user_id}")
                 return None
 
-            creds_data = user_doc.to_dict().get("google_credentials")
+            user_data = user_doc.to_dict()
+            creds_data = user_data.get("google_credentials")
             if not creds_data:
+                print(f"❌ [GoogleAuthService] No Google credentials found for user: {user_id}")
                 return None
 
+            print(f"✅ [GoogleAuthService] Found credentials for user: {user_id}")
+            
+            # Handle expiry date conversion
             expiry = creds_data.get("expiry")
-            if isinstance(expiry, str):
-                expiry = datetime.datetime.fromisoformat(expiry)
-            elif hasattr(expiry, "ToDatetime"):
-                expiry = expiry.ToDatetime()
-            creds_data["expiry"] = expiry
+            if expiry:
+                if isinstance(expiry, str):
+                    try:
+                        expiry = dt.datetime.fromisoformat(expiry.replace('Z', '+00:00'))
+                    except:
+                        expiry = dt.datetime.utcnow() + timedelta(hours=1)  # Default 1 hour
+                elif hasattr(expiry, "ToDatetime"):
+                    expiry = expiry.ToDatetime()
+                elif hasattr(expiry, "timestamp"):
+                    expiry = dt.datetime.fromtimestamp(expiry.timestamp())
+                else:
+                    expiry = dt.datetime.utcnow() + timedelta(hours=1)  # Default 1 hour
+            else:
+                expiry = dt.datetime.utcnow() + timedelta(hours=1)  # Default 1 hour
 
+            # Get token_uri with fallback
+            token_uri = creds_data.get("token_uri", "https://oauth2.googleapis.com/token")
+            
+            # Create credentials object
             credentials = Credentials(
-                token=creds_data["access_token"],
-                refresh_token=creds_data["refresh_token"],
-                token_uri=creds_data["token_uri"],
-                client_id=creds_data["client_id"],
-                client_secret=creds_data["client_secret"],
-                scopes=creds_data["scopes"],
+                token=creds_data.get("access_token"),
+                refresh_token=creds_data.get("refresh_token"),
+                token_uri=token_uri,
+                client_id=creds_data.get("client_id", self.client_id),
+                client_secret=creds_data.get("client_secret", self.client_secret),
+                scopes=creds_data.get("scopes", [
+                    "https://www.googleapis.com/auth/webmasters.readonly",
+                    "https://www.googleapis.com/auth/webmasters"
+                ]),
                 expiry=expiry
             )
 
+            # Check if credentials need refresh
             if credentials.expired and credentials.refresh_token:
-                credentials.refresh(Request())
-                updated_creds = GoogleCredentials(
-                    access_token=credentials.token,
-                    refresh_token=credentials.refresh_token,
-                    token_uri=credentials.token_uri,
-                    client_id=credentials.client_id,
-                    client_secret=credentials.client_secret,
-                    scopes=credentials.scopes,
-                    expiry=credentials.expiry
-                )
-                await self._save_user_credentials(user_id, updated_creds)
+                print(f"🔄 [GoogleAuthService] Refreshing expired credentials for user: {user_id}")
+                try:
+                    credentials.refresh(Request())
+                    
+                    # Update the credentials in database
+                    updated_creds = GoogleCredentials(
+                        access_token=credentials.token,
+                        refresh_token=credentials.refresh_token,
+                        token_uri=credentials.token_uri,
+                        client_id=credentials.client_id,
+                        client_secret=credentials.client_secret,
+                        scopes=credentials.scopes,
+                        expiry=credentials.expiry
+                    )
+                    await self._save_user_credentials(user_id, updated_creds)
+                    print(f"✅ [GoogleAuthService] Credentials refreshed for user: {user_id}")
+                except RefreshError as refresh_error:
+                    print(f"❌ [GoogleAuthService] Failed to refresh credentials: {refresh_error}")
+                    return None
 
             return credentials
 
         except RefreshError as e:
-            print(f"[RefreshError] {e}")
+            print(f"❌ [GoogleAuthService] RefreshError: {e}")
             await self._clear_user_credentials(user_id)
             return None
         except Exception as e:
-            print(f"[ERROR] get_user_credentials: {e}")
+            print(f"❌ [GoogleAuthService] Error getting credentials: {e}")
             return None
 
     async def _save_user_credentials(self, user_id: str, credentials: GoogleCredentials):
         self.db.collection('users').document(user_id).set({
             'google_credentials': credentials.dict(),
-            'last_login_at': datetime.datetime.utcnow()
+            'last_login_at': dt.datetime.utcnow()
         }, merge=True)
         print(f"[✅] Saved credentials for {user_id}")
 

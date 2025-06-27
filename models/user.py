@@ -21,7 +21,7 @@ class SearchConsoleProperty(BaseModel):
 
 class User(BaseModel):
     uid: str
-    email: EmailStr
+    email: Optional[str] = None
     display_name: Optional[str] = None
     photo_url: Optional[str] = None
     created_at: datetime.datetime = Field(default_factory=datetime.datetime.utcnow)

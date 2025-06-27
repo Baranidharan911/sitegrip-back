@@ -1,330 +1,65 @@
 import asyncio
+import json
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Set, Tuple
 from urllib.parse import urlparse, urljoin
 import requests
-from bs4 import BeautifulSoup
+import os
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 from db.firestore import get_or_create_firestore_client
 from models.sitemap import (
     SitemapEntry, SitemapStatus, IndexingHistory, IndexingResponse
 )
+from services.gsc_service import GSCService
 
 class SitemapService:
-    """Service for managing sitemap operations"""
+    """Service for sitemap management and Google Search Console integration"""
     
     def __init__(self):
         self.db = get_or_create_firestore_client()
-        self.google_sitemap_api_url = "https://www.google.com/webmasters/tools/feeds/{property}/sitemaps/"
+        self.gsc_service = GSCService()
+        self.sitemap_collection = "sitemaps"
         
-    async def submit_sitemap(
-        self, 
-        sitemap_url: str, 
-        auto_sync: bool, 
-        project_id: str, 
-        user_id: str
-    ) -> IndexingResponse:
-        """Submit a sitemap to Google"""
+        # Google Search Console API configuration
+        self.api_name = "searchconsole"
+        self.api_version = "v1"
+        self.scopes = [
+            "https://www.googleapis.com/auth/webmasters",
+            "https://www.googleapis.com/auth/webmasters.readonly"
+        ]
         
+        # Initialize Google service
+        self.service = self._initialize_google_service()
+        
+    def _initialize_google_service(self):
+        """Initialize Google Search Console API service"""
         try:
-            # Validate sitemap URL
-            if not self._is_valid_url(sitemap_url):
-                return IndexingResponse(
-                    success=False,
-                    message="Invalid sitemap URL",
-                    errors=["URL must be a valid HTTP/HTTPS URL"]
-                )
+            # Load service account credentials from environment or file
+            service_account_info = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
             
-            # Extract domain
-            domain = self._extract_domain(sitemap_url)
-            
-            # Check if sitemap already exists
-            existing_sitemap = await self._get_existing_sitemap(sitemap_url, user_id, project_id)
-            if existing_sitemap:
-                return IndexingResponse(
-                    success=False,
-                    message="Sitemap already exists",
-                    errors=["This sitemap has already been submitted"]
-                )
-            
-            # Validate sitemap content
-            validation_result = await self._validate_sitemap_content(sitemap_url)
-            if not validation_result["valid"]:
-                return IndexingResponse(
-                    success=False,
-                    message="Invalid sitemap content",
-                    errors=validation_result["errors"]
-                )
-            
-            # Create sitemap entry
-            sitemap_entry = SitemapEntry(
-                sitemap_url=sitemap_url,
-                status=SitemapStatus.SUBMITTED,
-                domain=domain,
-                auto_sync=auto_sync,
-                urls_count=validation_result.get("url_count", 0),
-                project_id=project_id,
-                user_id=user_id
-            )
-            
-            # Save to database
-            sitemap_id = await self._save_sitemap_entry(sitemap_entry)
-            
-            # Submit to Google (mock for now)
-            submission_result = await self._submit_sitemap_to_google(sitemap_url, user_id)
-            
-            if submission_result["success"]:
-                # Update status
-                await self._update_sitemap_status(sitemap_id, SitemapStatus.SUCCESS)
-                
-                # Log action
-                await self._log_sitemap_action(
-                    action_type="submit_sitemap",
-                    sitemap_url=sitemap_url,
-                    status="success",
-                    user_id=user_id,
-                    project_id=project_id,
-                    details={"url_count": validation_result.get("url_count", 0)}
-                )
-                
-                return IndexingResponse(
-                    success=True,
-                    message="Sitemap submitted successfully",
-                    data={
-                        "sitemap_id": sitemap_id,
-                        "url_count": validation_result.get("url_count", 0),
-                        "auto_sync": auto_sync
-                    }
+            if service_account_info:
+                # Parse JSON from environment variable
+                service_account_dict = json.loads(service_account_info)
+                credentials = service_account.Credentials.from_service_account_info(
+                    service_account_dict, scopes=self.scopes
                 )
             else:
-                # Update status to error
-                await self._update_sitemap_status(
-                    sitemap_id, 
-                    SitemapStatus.ERROR, 
-                    submission_result.get("error", "Unknown error")
-                )
-                
-                return IndexingResponse(
-                    success=False,
-                    message="Failed to submit sitemap",
-                    errors=[submission_result.get("error", "Unknown error")]
-                )
-                
-        except Exception as e:
-            return IndexingResponse(
-                success=False,
-                message="Internal error occurred",
-                errors=[str(e)]
-            )
-    
-    async def delete_sitemap(
-        self, 
-        sitemap_url: str, 
-        user_id: str, 
-        project_id: str
-    ) -> IndexingResponse:
-        """Delete a sitemap from Google"""
-        
-        try:
-            # Find existing sitemap
-            existing_sitemap = await self._get_existing_sitemap(sitemap_url, user_id, project_id)
-            if not existing_sitemap:
-                return IndexingResponse(
-                    success=False,
-                    message="Sitemap not found",
-                    errors=["Sitemap does not exist in the system"]
+                # Load from file
+                service_account_file = os.getenv('GOOGLE_SERVICE_ACCOUNT_FILE', 'serviceAccountKey.json')
+                credentials = service_account.Credentials.from_service_account_file(
+                    service_account_file, scopes=self.scopes
                 )
             
-            # Submit deletion to Google (mock for now)
-            deletion_result = await self._delete_sitemap_from_google(sitemap_url, user_id)
-            
-            if deletion_result["success"]:
-                # Update status to deleted
-                await self._update_sitemap_status(
-                    existing_sitemap["id"], 
-                    SitemapStatus.DELETED
-                )
-                
-                # Log action
-                await self._log_sitemap_action(
-                    action_type="delete_sitemap",
-                    sitemap_url=sitemap_url,
-                    status="success",
-                    user_id=user_id,
-                    project_id=project_id
-                )
-                
-                return IndexingResponse(
-                    success=True,
-                    message="Sitemap deleted successfully"
-                )
-            else:
-                return IndexingResponse(
-                    success=False,
-                    message="Failed to delete sitemap",
-                    errors=[deletion_result.get("error", "Unknown error")]
-                )
-                
-        except Exception as e:
-            return IndexingResponse(
-                success=False,
-                message="Internal error occurred",
-                errors=[str(e)]
-            )
-    
-    async def get_sitemaps(
-        self, 
-        user_id: str, 
-        project_id: Optional[str] = None,
-        limit: int = 100
-    ) -> List[SitemapEntry]:
-        """Get sitemaps for a user/project"""
-        try:
-            query = self.db.collection('sitemaps').where('user_id', '==', user_id)
-            
-            if project_id:
-                query = query.where('project_id', '==', project_id)
-            
-            query = query.order_by('submitted_at', direction='DESCENDING').limit(limit)
-            
-            docs = query.stream()
-            sitemaps = []
-            
-            for doc in docs:
-                data = doc.to_dict()
-                data['id'] = doc.id
-                sitemaps.append(SitemapEntry(**data))
-            
-            return sitemaps
+            return build(self.api_name, self.api_version, credentials=credentials)
             
         except Exception as e:
-            print(f"Error getting sitemaps: {e}")
-            return []
-    
-    async def sync_sitemaps_daily(self, user_id: str, project_id: str) -> Dict[str, any]:
-        """Perform daily auto-sync for sitemaps"""
-        try:
-            # Get sitemaps with auto-sync enabled
-            auto_sync_sitemaps = await self._get_auto_sync_sitemaps(user_id, project_id)
-            
-            sync_results = {
-                "total_sitemaps": len(auto_sync_sitemaps),
-                "successful_syncs": 0,
-                "failed_syncs": 0,
-                "errors": []
-            }
-            
-            for sitemap in auto_sync_sitemaps:
-                try:
-                    # Re-submit sitemap
-                    sync_result = await self._submit_sitemap_to_google(
-                        sitemap.sitemap_url, 
-                        user_id
-                    )
-                    
-                    if sync_result["success"]:
-                        # Update last sync time
-                        await self._update_sitemap_last_sync(sitemap)
-                        sync_results["successful_syncs"] += 1
-                        
-                        # Log sync action
-                        await self._log_sitemap_action(
-                            action_type="auto_sync_sitemap",
-                            sitemap_url=sitemap.sitemap_url,
-                            status="success",
-                            user_id=user_id,
-                            project_id=project_id
-                        )
-                    else:
-                        sync_results["failed_syncs"] += 1
-                        sync_results["errors"].append(
-                            f"{sitemap.sitemap_url}: {sync_result.get('error', 'Unknown error')}"
-                        )
-                        
-                except Exception as e:
-                    sync_results["failed_syncs"] += 1
-                    sync_results["errors"].append(f"{sitemap.sitemap_url}: {str(e)}")
-            
-            return sync_results
-            
-        except Exception as e:
-            return {
-                "total_sitemaps": 0,
-                "successful_syncs": 0,
-                "failed_syncs": 0,
-                "errors": [str(e)]
-            }
-    
-    async def analyze_sitemap_content(self, sitemap_url: str) -> Dict[str, any]:
-        """Analyze sitemap content and extract URLs"""
-        try:
-            # Download and parse sitemap
-            response = requests.get(sitemap_url, timeout=30)
-            response.raise_for_status()
-            
-            content_type = response.headers.get('content-type', '').lower()
-            
-            if 'xml' in content_type:
-                return await self._parse_xml_sitemap(response.content)
-            elif 'text' in content_type:
-                return await self._parse_text_sitemap(response.text)
-            else:
-                # Try to detect format by content
-                try:
-                    ET.fromstring(response.content)
-                    return await self._parse_xml_sitemap(response.content)
-                except ET.ParseError:
-                    return await self._parse_text_sitemap(response.text)
-                    
-        except Exception as e:
-            return {
-                "valid": False,
-                "errors": [str(e)],
-                "urls": [],
-                "url_count": 0
-            }
-    
-    async def discover_sitemaps_from_robots(self, domain: str) -> List[str]:
-        """Discover sitemaps from robots.txt"""
-        try:
-            robots_url = f"https://{domain}/robots.txt"
-            
-            try:
-                response = requests.get(robots_url, timeout=10)
-                response.raise_for_status()
-            except:
-                # Try with http if https fails
-                robots_url = f"http://{domain}/robots.txt"
-                response = requests.get(robots_url, timeout=10)
-                response.raise_for_status()
-            
-            sitemap_urls = []
-            lines = response.text.split('\n')
-            
-            for line in lines:
-                line = line.strip()
-                if line.lower().startswith('sitemap:'):
-                    sitemap_url = line.split(':', 1)[1].strip()
-                    if self._is_valid_url(sitemap_url):
-                        sitemap_urls.append(sitemap_url)
-            
-            return sitemap_urls
-            
-        except Exception as e:
-            print(f"Error discovering sitemaps from robots.txt: {e}")
-            return []
-    
-    # Private helper methods
-    
-    def _is_valid_url(self, url: str) -> bool:
-        """Validate URL format"""
-        try:
-            parsed = urlparse(url)
-            return bool(parsed.netloc) and parsed.scheme in ['http', 'https']
-        except Exception:
-            return False
+            print(f"Error initializing Google Search Console service: {e}")
+            return None
     
     def _extract_domain(self, url: str) -> str:
         """Extract domain from URL"""
@@ -332,255 +67,412 @@ class SitemapService:
             parsed = urlparse(url)
             return parsed.netloc.lower()
         except Exception:
-            return "unknown"
+            return url.lower()
     
-    async def _get_existing_sitemap(
+    async def submit_sitemap(
         self, 
-        sitemap_url: str, 
         user_id: str, 
-        project_id: str
-    ) -> Optional[Dict]:
-        """Check if sitemap already exists"""
+        property_url: str, 
+        sitemap_url: str
+    ) -> SitemapEntry:
+        """Submit a sitemap to Google Search Console"""
         try:
-            docs = self.db.collection('sitemaps')\
-                .where('sitemap_url', '==', sitemap_url)\
-                .where('user_id', '==', user_id)\
-                .where('project_id', '==', project_id)\
-                .limit(1)\
-                .stream()
+            domain = self._extract_domain(property_url)
+            
+            # Create sitemap entry
+            entry = SitemapEntry(
+                id=str(uuid.uuid4()),
+                sitemap_url=sitemap_url,
+                property_url=property_url,
+                domain=domain,
+                user_id=user_id,
+                status=SitemapStatus.PENDING
+            )
+            
+            # Store entry in database
+            await self._store_sitemap_entry(entry)
+            
+            # Submit to Google Search Console
+            success = await self._submit_sitemap_to_gsc(entry)
+            
+            if success:
+                entry.status = SitemapStatus.SUBMITTED
+                entry.submitted_at = datetime.utcnow()
+                
+                # Analyze sitemap content
+                await self._analyze_sitemap_content(entry)
+            else:
+                entry.status = SitemapStatus.FAILED
+                entry.completed_at = datetime.utcnow()
+            
+            # Update entry in database
+            await self._update_sitemap_entry(entry)
+            
+            return entry
+            
+        except Exception as e:
+            print(f"Error submitting sitemap: {e}")
+            entry = SitemapEntry(
+                id=str(uuid.uuid4()),
+                sitemap_url=sitemap_url,
+                property_url=property_url,
+                domain=self._extract_domain(property_url),
+                user_id=user_id,
+                status=SitemapStatus.FAILED,
+                error_message=str(e)
+            )
+            await self._store_sitemap_entry(entry)
+            return entry
+    
+    async def _submit_sitemap_to_gsc(self, entry: SitemapEntry) -> bool:
+        """Submit sitemap to Google Search Console API"""
+        try:
+            if not self.service:
+                entry.error_message = "Google Search Console service not initialized"
+                return False
+            
+            # Submit sitemap to GSC
+            request = self.service.sitemaps().submit(
+                siteUrl=entry.property_url,
+                feedpath=entry.sitemap_url
+            )
+            
+            response = request.execute()
+            
+            # Store Google's response
+            entry.google_response = response if response else {"submitted": True}
+            
+            return True
+                
+        except Exception as e:
+            print(f"Error calling Google Search Console API: {e}")
+            entry.error_message = str(e)
+            return False
+    
+    async def delete_sitemap(
+        self, 
+        user_id: str, 
+        property_url: str, 
+        sitemap_url: str
+    ) -> Dict[str, any]:
+        """Delete a sitemap from Google Search Console"""
+        try:
+            if not self.service:
+                return {"success": False, "error": "Google Search Console service not initialized"}
+            
+            # Delete sitemap from GSC
+            request = self.service.sitemaps().delete(
+                siteUrl=property_url,
+                feedpath=sitemap_url
+            )
+            
+            response = request.execute()
+            
+            # Update entry in database if exists
+            await self._update_sitemap_status_by_url(
+                user_id, sitemap_url, SitemapStatus.DELETED
+            )
+            
+            return {
+                "success": True,
+                "message": "Sitemap deleted successfully",
+                "sitemap_url": sitemap_url,
+                "property_url": property_url
+            }
+                
+        except Exception as e:
+            print(f"Error deleting sitemap: {e}")
+            return {"success": False, "error": str(e)}
+    
+    async def get_sitemaps_list(
+        self, 
+        user_id: str, 
+        property_url: str
+    ) -> List[Dict[str, any]]:
+        """Get list of sitemaps from Google Search Console"""
+        try:
+            if not self.service:
+                return []
+            
+            # Get sitemaps from GSC
+            request = self.service.sitemaps().list(siteUrl=property_url)
+            response = request.execute()
+            
+            sitemaps = response.get('sitemap', [])
+            
+            # Enhance with local database info
+            enhanced_sitemaps = []
+            for sitemap in sitemaps:
+                sitemap_url = sitemap.get('feedpath')
+                
+                # Get additional info from local database
+                local_entry = await self._get_sitemap_by_url(user_id, sitemap_url)
+                
+                enhanced_sitemap = {
+                    "sitemap_url": sitemap_url,
+                    "path": sitemap.get('path'),
+                    "type": sitemap.get('type'),
+                    "lastSubmitted": sitemap.get('lastSubmitted'),
+                    "isPending": sitemap.get('isPending', False),
+                    "isSitemapsIndex": sitemap.get('isSitemapsIndex', False),
+                    "contents": sitemap.get('contents', []),
+                    "errors": sitemap.get('errors', 0),
+                    "warnings": sitemap.get('warnings', 0),
+                    "local_info": local_entry.dict() if local_entry else None
+                }
+                
+                enhanced_sitemaps.append(enhanced_sitemap)
+            
+            return enhanced_sitemaps
+                
+        except Exception as e:
+            print(f"Error getting sitemaps list: {e}")
+            return []
+    
+    async def _analyze_sitemap_content(self, entry: SitemapEntry) -> bool:
+        """Analyze sitemap content and extract URLs"""
+        try:
+            # Fetch sitemap XML
+            response = requests.get(entry.sitemap_url, timeout=30)
+            response.raise_for_status()
+            
+            # Parse XML
+            root = ET.fromstring(response.content)
+            
+            # Handle namespace
+            namespaces = {
+                'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9'
+            }
+            
+            urls = []
+            url_count = 0
+            
+            # Check if it's a sitemap index
+            if root.tag.endswith('sitemapindex'):
+                entry.is_sitemap_index = True
+                # Extract child sitemaps
+                for sitemap in root.findall('sitemap:sitemap', namespaces):
+                    loc = sitemap.find('sitemap:loc', namespaces)
+                    if loc is not None:
+                        urls.append(loc.text)
+                        url_count += 1
+            else:
+                # Regular sitemap with URLs
+                for url in root.findall('sitemap:url', namespaces):
+                    loc = url.find('sitemap:loc', namespaces)
+                    if loc is not None:
+                        urls.append(loc.text)
+                        url_count += 1
+            
+            # Update entry with analysis results
+            entry.url_count = url_count
+            entry.urls_sample = urls[:100]  # Store first 100 URLs as sample
+            entry.last_analyzed = datetime.utcnow()
+            entry.content_analyzed = True
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error analyzing sitemap content: {e}")
+            entry.error_message = f"Content analysis failed: {str(e)}"
+            return False
+    
+    async def auto_discover_sitemaps(
+        self, 
+        user_id: str, 
+        property_url: str
+    ) -> List[str]:
+        """Auto-discover sitemaps from robots.txt"""
+        try:
+            sitemap_urls = []
+            
+            # Check robots.txt
+            robots_url = urljoin(property_url, '/robots.txt')
+            
+            try:
+                response = requests.get(robots_url, timeout=10)
+                response.raise_for_status()
+                
+                # Parse robots.txt for sitemap entries
+                for line in response.text.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith('sitemap:'):
+                        sitemap_url = line[8:].strip()
+                        if sitemap_url.startswith(('http://', 'https://')):
+                            sitemap_urls.append(sitemap_url)
+                
+            except Exception as e:
+                print(f"Error fetching robots.txt: {e}")
+            
+            # Common sitemap locations if none found in robots.txt
+            if not sitemap_urls:
+                common_paths = [
+                    '/sitemap.xml',
+                    '/sitemap_index.xml',
+                    '/sitemaps.xml',
+                    '/sitemap/sitemap.xml'
+                ]
+                
+                for path in common_paths:
+                    sitemap_url = urljoin(property_url, path)
+                    
+                    # Check if sitemap exists
+                    try:
+                        response = requests.head(sitemap_url, timeout=5)
+                        if response.status_code == 200:
+                            sitemap_urls.append(sitemap_url)
+                    except Exception:
+                        continue
+            
+            return sitemap_urls
+            
+        except Exception as e:
+            print(f"Error auto-discovering sitemaps: {e}")
+            return []
+    
+    async def sync_sitemaps_daily(self, user_id: Optional[str] = None) -> int:
+        """Daily sync of sitemaps - used by background job"""
+        try:
+            synced_count = 0
+            
+            # Get all submitted sitemaps that need sync
+            query = self.db.collection(self.sitemap_collection) \
+                       .where('status', '==', SitemapStatus.SUBMITTED.value) \
+                       .where('auto_sync', '==', True)
+            
+            if user_id:
+                query = query.where('user_id', '==', user_id)
+            
+            docs = query.stream()
+            
+            for doc in docs:
+                try:
+                    data = doc.to_dict()
+                    data['id'] = doc.id
+                    entry = SitemapEntry(**data)
+                    
+                    # Re-analyze sitemap content
+                    success = await self._analyze_sitemap_content(entry)
+                    
+                    if success:
+                        entry.last_synced = datetime.utcnow()
+                        await self._update_sitemap_entry(entry)
+                        synced_count += 1
+                    
+                    # Rate limiting
+                    await asyncio.sleep(1)
+                    
+                except Exception as e:
+                    print(f"Error syncing sitemap {doc.id}: {e}")
+                    continue
+            
+            return synced_count
+            
+        except Exception as e:
+            print(f"Error during daily sitemap sync: {e}")
+            return 0
+    
+    async def get_sitemap_history(
+        self, 
+        user_id: str, 
+        page: int = 1, 
+        page_size: int = 50
+    ) -> Tuple[List[SitemapEntry], int]:
+        """Get sitemap submission history"""
+        try:
+            # Build query
+            query = self.db.collection(self.sitemap_collection) \
+                       .where('user_id', '==', user_id) \
+                       .order_by('created_at', direction='DESCENDING')
+            
+            # Get total count
+            all_docs = query.stream()
+            total_count = sum(1 for _ in all_docs)
+            
+            # Get paginated results
+            offset = (page - 1) * page_size
+            query = query.offset(offset).limit(page_size)
+            
+            docs = query.stream()
+            entries = []
             
             for doc in docs:
                 data = doc.to_dict()
                 data['id'] = doc.id
-                return data
+                entries.append(SitemapEntry(**data))
+            
+            return entries, total_count
+            
+        except Exception as e:
+            print(f"Error getting sitemap history: {e}")
+            return [], 0
+    
+    async def _store_sitemap_entry(self, entry: SitemapEntry) -> bool:
+        """Store sitemap entry in database"""
+        try:
+            doc_ref = self.db.collection(self.sitemap_collection).document(entry.id)
+            doc_ref.set(entry.dict(exclude={'id'}))
+            return True
+        except Exception as e:
+            print(f"Error storing sitemap entry: {e}")
+            return False
+    
+    async def _update_sitemap_entry(self, entry: SitemapEntry) -> bool:
+        """Update sitemap entry in database"""
+        try:
+            doc_ref = self.db.collection(self.sitemap_collection).document(entry.id)
+            doc_ref.update(entry.dict(exclude={'id'}))
+            return True
+        except Exception as e:
+            print(f"Error updating sitemap entry: {e}")
+            return False
+    
+    async def _get_sitemap_by_url(self, user_id: str, sitemap_url: str) -> Optional[SitemapEntry]:
+        """Get sitemap entry by URL"""
+        try:
+            query = self.db.collection(self.sitemap_collection) \
+                       .where('user_id', '==', user_id) \
+                       .where('sitemap_url', '==', sitemap_url) \
+                       .limit(1)
+            
+            docs = list(query.stream())
+            
+            if docs:
+                data = docs[0].to_dict()
+                data['id'] = docs[0].id
+                return SitemapEntry(**data)
             
             return None
             
         except Exception as e:
-            print(f"Error checking existing sitemap: {e}")
+            print(f"Error getting sitemap by URL: {e}")
             return None
     
-    async def _validate_sitemap_content(self, sitemap_url: str) -> Dict[str, any]:
-        """Validate sitemap content"""
-        try:
-            analysis = await self.analyze_sitemap_content(sitemap_url)
-            return analysis
-            
-        except Exception as e:
-            return {
-                "valid": False,
-                "errors": [str(e)],
-                "url_count": 0
-            }
-    
-    async def _save_sitemap_entry(self, sitemap: SitemapEntry) -> str:
-        """Save sitemap entry to database"""
-        try:
-            doc_ref = self.db.collection('sitemaps').add(sitemap.dict())
-            return doc_ref[1].id
-        except Exception as e:
-            print(f"Error saving sitemap entry: {e}")
-            raise
-    
-    async def _update_sitemap_status(
+    async def _update_sitemap_status_by_url(
         self, 
-        sitemap_id: str, 
-        status: SitemapStatus, 
-        error_message: Optional[str] = None
+        user_id: str, 
+        sitemap_url: str, 
+        status: SitemapStatus
     ) -> bool:
-        """Update sitemap status"""
+        """Update sitemap status by URL"""
         try:
-            update_data = {
-                'status': status.value,
-                'last_submitted': datetime.utcnow()
-            }
+            query = self.db.collection(self.sitemap_collection) \
+                       .where('user_id', '==', user_id) \
+                       .where('sitemap_url', '==', sitemap_url)
             
-            if error_message:
-                update_data['error_message'] = error_message
+            docs = query.stream()
             
-            self.db.collection('sitemaps').document(sitemap_id).update(update_data)
+            for doc in docs:
+                doc.reference.update({
+                    'status': status.value,
+                    'updated_at': datetime.utcnow()
+                })
+            
             return True
             
         except Exception as e:
             print(f"Error updating sitemap status: {e}")
             return False
-    
-    async def _submit_sitemap_to_google(self, sitemap_url: str, user_id: str) -> Dict[str, any]:
-        """Submit sitemap to Google (mock implementation)"""
-        try:
-            # Mock implementation - in production, this would:
-            # 1. Get user's Google Search Console credentials
-            # 2. Make authenticated request to GSC API
-            # 3. Handle response and return appropriate status
-            
-            # Simulate API call
-            await asyncio.sleep(0.2)  # Simulate network delay
-            
-            # Mock success rate of 95%
-            import random
-            if random.random() < 0.95:
-                return {"success": True, "message": "Sitemap submitted successfully"}
-            else:
-                return {"success": False, "error": "Failed to submit sitemap to Google"}
-                
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def _delete_sitemap_from_google(self, sitemap_url: str, user_id: str) -> Dict[str, any]:
-        """Delete sitemap from Google (mock implementation)"""
-        try:
-            # Mock implementation
-            await asyncio.sleep(0.1)
-            
-            # Mock success rate of 98%
-            import random
-            if random.random() < 0.98:
-                return {"success": True, "message": "Sitemap deleted successfully"}
-            else:
-                return {"success": False, "error": "Failed to delete sitemap from Google"}
-                
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def _get_auto_sync_sitemaps(self, user_id: str, project_id: str) -> List[SitemapEntry]:
-        """Get sitemaps with auto-sync enabled"""
-        try:
-            docs = self.db.collection('sitemaps')\
-                .where('user_id', '==', user_id)\
-                .where('project_id', '==', project_id)\
-                .where('auto_sync', '==', True)\
-                .where('status', 'in', [SitemapStatus.SUBMITTED.value, SitemapStatus.SUCCESS.value])\
-                .stream()
-            
-            sitemaps = []
-            for doc in docs:
-                data = doc.to_dict()
-                data['id'] = doc.id
-                sitemaps.append(SitemapEntry(**data))
-            
-            return sitemaps
-            
-        except Exception as e:
-            print(f"Error getting auto-sync sitemaps: {e}")
-            return []
-    
-    async def _update_sitemap_last_sync(self, sitemap: SitemapEntry) -> bool:
-        """Update last sync time for sitemap"""
-        try:
-            if hasattr(sitemap, 'id'):
-                self.db.collection('sitemaps').document(sitemap.id).update({
-                    'last_sync_at': datetime.utcnow()
-                })
-                return True
-            return False
-            
-        except Exception as e:
-            print(f"Error updating sitemap last sync: {e}")
-            return False
-    
-    async def _parse_xml_sitemap(self, content: bytes) -> Dict[str, any]:
-        """Parse XML sitemap content"""
-        try:
-            root = ET.fromstring(content)
-            
-            # Handle different sitemap namespaces
-            namespaces = {
-                'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9',
-                'image': 'http://www.google.com/schemas/sitemap-image/1.1',
-                'news': 'http://www.google.com/schemas/sitemap-news/0.9'
-            }
-            
-            urls = []
-            
-            # Check if it's a sitemap index
-            sitemapindex_urls = root.findall('sitemap:sitemap/sitemap:loc', namespaces)
-            if sitemapindex_urls:
-                # It's a sitemap index
-                for url_elem in sitemapindex_urls:
-                    if url_elem.text:
-                        urls.append(url_elem.text.strip())
-            else:
-                # It's a regular sitemap
-                url_elements = root.findall('sitemap:url/sitemap:loc', namespaces)
-                for url_elem in url_elements:
-                    if url_elem.text:
-                        urls.append(url_elem.text.strip())
-            
-            return {
-                "valid": True,
-                "urls": urls,
-                "url_count": len(urls),
-                "errors": [],
-                "type": "xml_sitemap"
-            }
-            
-        except ET.ParseError as e:
-            return {
-                "valid": False,
-                "errors": [f"XML parsing error: {str(e)}"],
-                "urls": [],
-                "url_count": 0
-            }
-        except Exception as e:
-            return {
-                "valid": False,
-                "errors": [str(e)],
-                "urls": [],
-                "url_count": 0
-            }
-    
-    async def _parse_text_sitemap(self, content: str) -> Dict[str, any]:
-        """Parse text sitemap content"""
-        try:
-            lines = content.strip().split('\n')
-            urls = []
-            
-            for line in lines:
-                line = line.strip()
-                if line and self._is_valid_url(line):
-                    urls.append(line)
-            
-            return {
-                "valid": True,
-                "urls": urls,
-                "url_count": len(urls),
-                "errors": [],
-                "type": "text_sitemap"
-            }
-            
-        except Exception as e:
-            return {
-                "valid": False,
-                "errors": [str(e)],
-                "urls": [],
-                "url_count": 0
-            }
-    
-    async def _log_sitemap_action(
-        self,
-        action_type: str,
-        sitemap_url: str,
-        status: str,
-        user_id: str,
-        project_id: str,
-        details: Optional[Dict] = None
-    ) -> None:
-        """Log sitemap action to history"""
-        try:
-            history_entry = IndexingHistory(
-                action_id=str(uuid.uuid4()),
-                action_type=action_type,
-                sitemap_url=sitemap_url,
-                status=status,
-                user_id=user_id,
-                project_id=project_id,
-                details=details or {}
-            )
-            
-            self.db.collection('indexing_history').add(history_entry.dict())
-            
-        except Exception as e:
-            print(f"Error logging sitemap action: {e}")
 
 # Global service instance
 sitemap_service = SitemapService() 

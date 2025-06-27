@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Any
 import json
 import requests
 import os
@@ -10,6 +10,12 @@ from db.firestore import get_or_create_firestore_client
 from models.gsc import (
     GSCData, GSCProperty, GSCCoverageStatus, GSCAuthResponse
 )
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from models.gsc_data import IndexStatus
+from services.google_auth_service import google_auth_service
 
 class GSCService:
     """Service for Google Search Console integration"""
@@ -26,6 +32,9 @@ class GSCService:
         self.client_id = os.getenv('GOOGLE_CLIENT_ID', 'your-client-id')
         self.client_secret = os.getenv('GOOGLE_CLIENT_SECRET', 'your-client-secret')
         self.redirect_uri = os.getenv('GSC_REDIRECT_URI', 'http://localhost:3000/auth/gsc/callback')
+        self.api_name = "searchconsole"
+        self.api_version = "v1"
+        self.index_status_collection = "index_status"
     
     def get_oauth_authorization_url(self, state: str) -> str:
         """Generate OAuth authorization URL for Google Search Console"""
@@ -230,6 +239,208 @@ class GSCService:
         except Exception as e:
             print(f"Error revoking user access: {e}")
             return False
+    
+    async def _get_service(self, user_id: str):
+        """Get GSC service with user credentials"""
+        try:
+            creds = await google_auth_service.get_refreshed_credentials(user_id)
+            if not creds:
+                return None
+            return build(self.api_name, self.api_version, credentials=creds, cache_discovery=False)
+        except Exception as e:
+            print(f"Error getting GSC service: {e}")
+            return None
+    
+    async def get_index_status(self, user_id: str, site_url: str) -> Optional[IndexStatus]:
+        """Get indexing status for a site"""
+        try:
+            service = await self._get_service(user_id)
+            if not service:
+                return None
+            
+            # Get URL inspection data
+            inspection_data = await self._get_url_inspection_data(service, site_url)
+            
+            # Get coverage data
+            coverage_data = await self._get_coverage_data(service, site_url)
+            
+            # Get mobile usability data
+            mobile_data = await self._get_mobile_usability_data(service, site_url)
+            
+            # Combine all data
+            status = IndexStatus(
+                site_url=site_url,
+                total_urls=coverage_data.get("total_urls", 0),
+                indexed_urls=coverage_data.get("indexed_urls", 0),
+                not_indexed_urls=coverage_data.get("not_indexed_urls", 0),
+                crawled_urls=coverage_data.get("crawled_urls", 0),
+                last_updated=datetime.utcnow(),
+                coverage_state=coverage_data.get("states", {}),
+                mobile_usability=mobile_data,
+                errors=coverage_data.get("errors", []),
+                warnings=coverage_data.get("warnings", [])
+            )
+            
+            # Store in database
+            await self._store_index_status(user_id, status)
+            
+            return status
+            
+        except Exception as e:
+            print(f"Error getting index status: {e}")
+            return None
+    
+    async def _get_url_inspection_data(self, service, site_url: str) -> Dict[str, Any]:
+        """Get URL inspection data from GSC"""
+        try:
+            # Use the URL Inspection API to get site-wide data
+            body = {
+                "inspectionUrl": site_url,
+                "siteUrl": site_url
+            }
+            response = service.urlInspection().index().list(body=body).execute()
+            return response
+        except Exception as e:
+            print(f"Error getting URL inspection data: {e}")
+            return {}
+    
+    async def _get_coverage_data(self, service, site_url: str) -> Dict[str, Any]:
+        """Get coverage data from GSC"""
+        try:
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=7)  # Last 7 days
+            
+            body = {
+                "startDate": start_date.strftime("%Y-%m-%d"),
+                "endDate": end_date.strftime("%Y-%m-%d"),
+                "dimensions": ["page"],
+                "rowLimit": 25000  # Maximum allowed
+            }
+            
+            response = service.searchanalytics().query(siteUrl=site_url, body=body).execute()
+            
+            # Process coverage data
+            coverage_data = {
+                "total_urls": 0,
+                "indexed_urls": 0,
+                "not_indexed_urls": 0,
+                "crawled_urls": 0,
+                "states": {},
+                "errors": [],
+                "warnings": []
+            }
+            
+            if "rows" in response:
+                for row in response["rows"]:
+                    coverage_data["total_urls"] += 1
+                    if row.get("keys"):
+                        url = row["keys"][0]
+                        # Get detailed status for this URL
+                        try:
+                            inspection = service.urlInspection().index().inspect(
+                                body={"siteUrl": site_url, "inspectionUrl": url}
+                            ).execute()
+                            
+                            status = inspection.get("inspectionResult", {}).get("indexStatusResult", {})
+                            coverage_state = status.get("coverageState", "")
+                            
+                            # Update counts
+                            if coverage_state in ["Indexed", "Submitted and indexed"]:
+                                coverage_data["indexed_urls"] += 1
+                            else:
+                                coverage_data["not_indexed_urls"] += 1
+                            
+                            if status.get("lastCrawlTime"):
+                                coverage_data["crawled_urls"] += 1
+                            
+                            # Update state counts
+                            coverage_data["states"][coverage_state] = coverage_data["states"].get(coverage_state, 0) + 1
+                            
+                            # Check for errors and warnings
+                            if status.get("robotsTxtState") == "BLOCKED":
+                                coverage_data["errors"].append(f"Blocked by robots.txt: {url}")
+                            if status.get("indexingState") == "BLOCKED_ROBOTS_TXT":
+                                coverage_data["errors"].append(f"Indexing blocked by robots.txt: {url}")
+                            if status.get("mobileFriendlyIssues"):
+                                coverage_data["warnings"].append(f"Mobile usability issues: {url}")
+                            
+                        except Exception as e:
+                            print(f"Error inspecting URL {url}: {e}")
+                            continue
+            
+            return coverage_data
+            
+        except Exception as e:
+            print(f"Error getting coverage data: {e}")
+            return {}
+    
+    async def _get_mobile_usability_data(self, service, site_url: str) -> Dict[str, int]:
+        """Get mobile usability data from GSC"""
+        try:
+            end_date = datetime.utcnow()
+            start_date = end_date - timedelta(days=7)
+            
+            body = {
+                "startDate": start_date.strftime("%Y-%m-%d"),
+                "endDate": end_date.strftime("%Y-%m-%d"),
+                "dimensions": ["device"],
+                "rowLimit": 10
+            }
+            
+            response = service.searchanalytics().query(siteUrl=site_url, body=body).execute()
+            
+            mobile_data = {
+                "MOBILE_FRIENDLY": 0,
+                "MOBILE_ISSUES": 0,
+                "NOT_MOBILE_FRIENDLY": 0
+            }
+            
+            if "rows" in response:
+                for row in response["rows"]:
+                    if row.get("keys") and row["keys"][0] == "MOBILE":
+                        # Get detailed mobile usability data
+                        try:
+                            usability = service.urlInspection().index().inspect(
+                                body={
+                                    "siteUrl": site_url,
+                                    "inspectionUrl": site_url,
+                                    "categoryParams": {"category": "MOBILE_USABILITY"}
+                                }
+                            ).execute()
+                            
+                            result = usability.get("inspectionResult", {}).get("mobileFriendliness", "")
+                            mobile_data[result] = mobile_data.get(result, 0) + 1
+                            
+                        except Exception as e:
+                            print(f"Error getting mobile usability: {e}")
+                            continue
+            
+            return mobile_data
+            
+        except Exception as e:
+            print(f"Error getting mobile usability data: {e}")
+            return {}
+    
+    async def _store_index_status(self, user_id: str, status: IndexStatus):
+        """Store index status in database"""
+        try:
+            doc_id = f"{user_id}_{status.site_url}"
+            doc_ref = self.db.collection(self.index_status_collection).document(doc_id)
+            doc_ref.set(status.dict())
+        except Exception as e:
+            print(f"Error storing index status: {e}")
+    
+    async def get_stored_index_status(self, user_id: str, site_url: str) -> Optional[IndexStatus]:
+        """Get stored index status from database"""
+        try:
+            doc_id = f"{user_id}_{site_url}"
+            doc = self.db.collection(self.index_status_collection).document(doc_id).get()
+            if doc.exists:
+                return IndexStatus(**doc.to_dict())
+            return None
+        except Exception as e:
+            print(f"Error getting stored index status: {e}")
+            return None
     
     # Private helper methods
     

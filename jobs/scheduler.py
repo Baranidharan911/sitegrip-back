@@ -1,34 +1,45 @@
 import asyncio
+from datetime import datetime, timedelta
 from services.uptime_checker import uptime_checker
 from services.storage_uptime import uptime_storage
 from models.uptime_log import UptimeLog
-import time
 
-CHECK_INTERVAL_SECONDS = 300  # 5 minutes
+MIN_CHECK_INTERVAL = 60  # 1 minute in seconds
 
 class UptimeScheduler:
     def __init__(self):
         self._running = False
+        self._last_checks = {}  # monitor_id -> last check time
 
     async def start(self):
         self._running = True
         print("🔄 Uptime scheduler started.")
         while self._running:
             await self._run_once()
-            await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+            await asyncio.sleep(MIN_CHECK_INTERVAL)
 
     async def _run_once(self):
-        print("📡 Running uptime check for all monitors...")
+        now = datetime.utcnow()
         monitors = uptime_storage.get_all_monitors()
+        
         for monitor in monitors:
             try:
-                result = await uptime_checker.check(monitor.url)
+                # Check if it's time to check this monitor
+                last_check = self._last_checks.get(monitor.id)
+                if last_check:
+                    next_check = last_check + timedelta(minutes=monitor.frequency)
+                    if now < next_check:
+                        continue
+
+                # Perform the check
+                result = await uptime_checker.check(str(monitor.url))
 
                 # Save log
                 log = UptimeLog(
                     timestamp=result.timestamp,
                     status=result.status,
                     response_time=result.response_time,
+                    http_status=result.http_status,
                     error=result.error,
                 )
                 uptime_storage.save_log(monitor.id, log)
@@ -38,6 +49,7 @@ class UptimeScheduler:
                     monitor.id,
                     result.status,
                     result.response_time,
+                    result.http_status,
                     result.timestamp,
                 )
 
@@ -58,10 +70,12 @@ class UptimeScheduler:
                 stats = {
                     "24h": uptime_storage.calculate_uptime_percentage(monitor.id, 1440),
                     "7d": uptime_storage.calculate_uptime_percentage(monitor.id, 10080),
+                    "30d": uptime_storage.calculate_uptime_percentage(monitor.id, 43200),
                 }
-                uptime_storage.monitors.document(monitor.id).update({
-                    "uptimeStats": stats
-                })
+                uptime_storage.update_monitor(monitor.id, uptime_stats=stats)
+
+                # Update last check time
+                self._last_checks[monitor.id] = now
 
                 print(f"✅ Checked {monitor.url}: {result.status.upper()} ({result.response_time} ms)")
 
